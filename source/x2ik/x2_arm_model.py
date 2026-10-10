@@ -44,8 +44,7 @@ ARM_JOINT_SUFFIX = (
     "wrist_roll_joint",
 )
 
-# 末端连杆(腕 roll 之后的连杆)。装手后的 TCP 需要在此基础上再加一段标定外参,
-# 见 ArmModel.tcp_offset 与 ArmModel.tcp_rotation。
+# 末端连杆(腕 roll 之后的连杆)。本项目固定用它的原点，不提供工具外参。
 EE_LINK_SUFFIX = "wrist_roll_link"
 
 
@@ -252,16 +251,15 @@ def parse_mjcf_ctrlrange(mjcf_path: Path) -> Dict[str, float]:
 class ArmModel:
     """X2 单臂 7-DOF 运动学。
 
-    所有位姿都在 torso_link 系下。q 的顺序即 ARM_JOINT_SUFFIX。
+    所有位姿都在 torso_link 系下；末端固定为 wrist_roll_link 原点。
+    q 的顺序即 ARM_JOINT_SUFFIX。
     """
 
     def __init__(
         self,
         side: str = "right",
         urdf_path: Path = DEFAULT_URDF,
-        tcp_offset: Optional[np.ndarray] = None,
         mjcf_path: Optional[Path] = DEFAULT_MJCF,
-        tcp_rotation: Optional[np.ndarray] = None,
     ):
         if side not in ("left", "right"):
             raise ValueError("side 必须是 'left' 或 'right'")
@@ -292,22 +290,6 @@ class ArmModel:
             for n, a, b in zip(self.joint_names, self.tau_max, self.tau_max_mjcf)
             if not np.isnan(b) and abs(a - b) > 1e-9
         ]
-
-        # T_wrist_tcp: 平移在 wrist_roll_link 系表达,旋转将 TCP 向量变换到腕系。
-        # 必须同时去掉这两部分才能从 TCP 目标位姿反推腕部目标。
-        self.tcp_offset = (np.zeros(3) if tcp_offset is None
-                           else np.array(tcp_offset, dtype=float, copy=True))
-        self.tcp_rotation = (np.eye(3) if tcp_rotation is None
-                             else np.array(tcp_rotation, dtype=float, copy=True))
-        if self.tcp_offset.shape != (3,) or not np.isfinite(self.tcp_offset).all():
-            raise ValueError("tcp_offset 必须是有限的 3 维向量,单位 m")
-        if (self.tcp_rotation.shape != (3, 3)
-                or not np.isfinite(self.tcp_rotation).all()
-                or not np.allclose(self.tcp_rotation.T @ self.tcp_rotation,
-                                   np.eye(3), atol=1e-6, rtol=0.0)
-                or not np.isclose(np.linalg.det(self.tcp_rotation), 1.0,
-                                  atol=1e-6, rtol=0.0)):
-            raise ValueError("tcp_rotation 必须是有限的 3x3 SO(3) 旋转矩阵")
 
         self._cache_batch_tables()
         self._cache_zero_geometry()
@@ -348,11 +330,9 @@ class ArmModel:
         return axes
 
     def forward_kinematics(self, q: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """末端 TCP 的位置与姿态。"""
+        """wrist_roll_link 原点在 torso 系下的位置与姿态。"""
         positions, rotations = self.joint_frames(q)
-        rot = rotations[-1]
-        pos = positions[-1] + rot @ self.tcp_offset
-        return pos, rot @ self.tcp_rotation
+        return positions[-1], rotations[-1]
 
     def wrist_center(self, q: np.ndarray) -> np.ndarray:
         """腕三轴交点。解析 IK 的关键中间量。
@@ -410,11 +390,9 @@ class ArmModel:
                 rotations.reshape(lead + (n, 3, 3)))
 
     def fk_batch(self, q_arr: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """末端 TCP 位姿的批量版。返回 (pos (...,3), rot (...,3,3))。"""
+        """腕原点位姿的批量版。返回 (pos (...,3), rot (...,3,3))。"""
         positions, rotations = self.joint_frames_batch(q_arr)
-        rot = rotations[..., -1, :, :]
-        pos = positions[..., -1, :] + rot @ self.tcp_offset
-        return pos, rot @ self.tcp_rotation
+        return positions[..., -1, :], rotations[..., -1, :, :]
 
     def axes_batch(self, q_arr: np.ndarray) -> np.ndarray:
         """各关节转轴在 torso 系下的方向,批量版。返回 (...,7,3)。"""
@@ -437,8 +415,7 @@ class ArmModel:
         polish 的增广雅可比要在同一批关节角上同时取"雅可比 + SEW 角",
         走这个入口就只需一次 joint_frames_batch。
         """
-        rot_ee = rotations[..., -1, :, :]
-        ee_pos = positions[..., -1, :] + rot_ee @ self.tcp_offset
+        ee_pos = positions[..., -1, :]
         before = np.empty_like(rotations)
         before[..., 0, :, :] = np.eye(3)
         before[..., 1:, :, :] = rotations[..., :-1, :, :]

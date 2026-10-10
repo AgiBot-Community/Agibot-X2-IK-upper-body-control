@@ -479,7 +479,7 @@ def zero_frame_table(model: ArmModel) -> str:
     lines.append(f"  末端零位姿态 R =")
     for row in np.round(ee_rot, 6):
         lines.append(f"      {row.tolist()}")
-    lines.append(f"  tcp_offset(末端连杆系,装手后须标定) = {model.tcp_offset.tolist()}")
+    lines.append("  末端固定为腕原点；不提供末端工具配置或标定")
     lines.append(f"  限位 q_min = {np.round(model.q_min, 4).tolist()}")
     lines.append(f"       q_max = {np.round(model.q_max, 4).tolist()}")
     return "\n".join(lines)
@@ -722,8 +722,8 @@ def cross_check_mjcf(model: ArmModel, mjcf_path: Path = DEFAULT_MJCF,
     for _ in range(samples):
         q = rng.uniform(model.q_min, model.q_max)
         p1, r1 = mjcf_fk(chain, q)
-        p2, r2 = model.forward_kinematics(q)   # tcp_offset 为 0 时可直接比
-        dp = max(dp, float(np.linalg.norm(p1 - (p2 - r2 @ model.tcp_offset))))
+        p2, r2 = model.forward_kinematics(q)
+        dp = max(dp, float(np.linalg.norm(p1 - p2)))
         dr = max(dr, float(np.max(np.abs(r1 - r2))))
     return (f"[{model.side} arm] URDF vs MJCF 交叉校验({samples} 组随机 q)\n"
             f"  逐关节 |Δorigin_xyz| max = {d_org:.3e} m\n"

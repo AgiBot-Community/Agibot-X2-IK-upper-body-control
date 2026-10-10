@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""X2 单臂重力与负载前馈。
+"""X2 单臂连杆重力前馈。
 
 用途按接口方案分两种:
 
   方案二(开放关节控制接口,含力矩):
-      tau_cmd = kp*(q_d - q) + kd*(dq_d - dq) + tau_g(q) + tau_load(q)
+      tau_cmd = kp*(q_d - q) + kd*(dq_d - dq) + tau_g(q)
       重力项直接进 tau_ff,是真正的前馈,能显著降低稳态跟踪误差。
 
   方案一(原生上下肢分离,只有位置指令):
@@ -80,18 +80,13 @@ def parse_urdf_inertials(urdf_path: Path) -> Dict[str, LinkInertial]:
 
 
 class ArmDynamics:
-    """单臂重力 / 负载前馈。
+    """单臂连杆重力前馈。
 
-    payload_mass + payload_com 描述装在腕 roll 连杆末端的手爪或工件。
-    URDF 里没有 hand link,所以这部分必须由调用方按实际手型给出。
-    payload_com 保持历史约定:从 TCP 原点到质心的偏移,在 wrist_roll_link
-    坐标系表达。改变 TCP 轴方向不会转动同一个物理负载的质心。
+    仅按机器人 URDF 的手臂连杆惯性计算；不接受负载或末端工具参数。
+    不同末端工具需单独建模、解析并验证重力补偿，本项目不支持泛化。
     """
 
-    def __init__(self, model: ArmModel,
-                 payload_mass: float = 0.0,
-                 payload_com: Optional[Sequence[float]] = None,
-                 gravity: Optional[Sequence[float]] = None):
+    def __init__(self, model: ArmModel, gravity: Optional[Sequence[float]] = None):
         self.model = model
         inertials = parse_urdf_inertials(model.urdf_path)
         names = [f"{model.side}_{s}" for s in ARM_LINK_SUFFIX]
@@ -102,9 +97,6 @@ class ArmDynamics:
         self.masses = np.array([l.mass for l in self.links])
         self.arm_mass = float(self.masses.sum())
 
-        self.payload_mass = float(payload_mass)
-        self.payload_com = (np.zeros(3) if payload_com is None
-                            else np.asarray(payload_com, float))
         self.gravity = GRAVITY.copy() if gravity is None else np.asarray(gravity, float)
 
     # ---------- 质心 ----------
@@ -118,38 +110,26 @@ class ArmDynamics:
         return [positions[j] + rotations[j] @ self.links[j].com for j in range(7)]
 
     def total_com(self, q: np.ndarray) -> np.ndarray:
-        """整条臂(含负载)的合质心,可用于整机平衡/腰部补偿。"""
+        """机器人手臂连杆的合质心。"""
         coms = self.link_coms(q)
         weighted = sum(m * c for m, c in zip(self.masses, coms))
-        total = self.arm_mass
-        if self.payload_mass > 0.0:
-            positions, rotations = self.model.joint_frames(q)
-            tip = positions[6] + rotations[6] @ (self.model.tcp_offset + self.payload_com)
-            weighted = weighted + self.payload_mass * tip
-            total += self.payload_mass
-        return weighted / total
+        return weighted / self.arm_mass
 
     # ---------- 重力力矩 ----------
 
-    def gravity_torque(self, q: np.ndarray, include_payload: bool = True) -> np.ndarray:
+    def gravity_torque(self, q: np.ndarray) -> np.ndarray:
         """tau_g(q),单位 N·m。正号约定与 URDF 关节正方向一致。"""
         q = np.asarray(q, float)
         positions, rotations = self.model.joint_frames(q)
         axes = self.model.axes_at(q)
         coms = [positions[j] + rotations[j] @ self.links[j].com for j in range(7)]
 
-        masses = list(self.masses)
-        if include_payload and self.payload_mass > 0.0:
-            coms.append(positions[6] + rotations[6]
-                        @ (self.model.tcp_offset + self.payload_com))
-            masses.append(self.payload_mass)
-
         tau = np.zeros(7)
         for i in range(7):
             axis, origin = axes[i], positions[i]
             acc = 0.0
-            for j in range(i, len(masses)):       # 只累下游连杆
-                acc += masses[j] * float(np.dot(self.gravity,
+            for j in range(i, len(self.masses)):       # 只累下游连杆
+                acc += self.masses[j] * float(np.dot(self.gravity,
                                                 cross3(axis, coms[j] - origin)))
             tau[i] = -acc
         return tau
@@ -212,7 +192,7 @@ class ArmDynamics:
 if __name__ == "__main__":
     for side in ("right", "left"):
         model = ArmModel(side)
-        dyn = ArmDynamics(model, payload_mass=0.5, payload_com=[0.0, 0.0, 0.05])
+        dyn = ArmDynamics(model)
         print(f"===== {side} =====")
         print(f"  臂总质量 : {dyn.arm_mass:.3f} kg  (逐连杆 "
               f"{np.round(dyn.masses, 3).tolist()})")

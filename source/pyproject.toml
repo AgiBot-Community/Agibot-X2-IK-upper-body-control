@@ -12,7 +12,7 @@ x2ik = "x2ik.__main__:main"
 [tool.setuptools]
 include-package-data = false
 [tool.setuptools.package-data]
-x2ik = ["*.urdf", "*.xml", "assets/*.json", "licenses/*"]
+x2ik = ["*.urdf", "*.xml", "licenses/*"]
 
 [tool.setuptools.packages.find]
 include = ["x2ik"]

@@ -260,9 +260,8 @@ class BatchSrsCore:
         n_psi = psi.shape[1]
 
         # --- 1. 目标腕心与肩腕距离(与 psi 无关) ---
-        rot_wrist = rot_arr @ model.tcp_rotation.T
-        ee_origin = pos_arr - rot_wrist @ model.tcp_offset
-        wrist_t = ee_origin + rot_wrist @ ik.wrist_local      # type: ignore[attr-defined]
+        rot_wrist = rot_arr
+        wrist_t = pos_arr + rot_wrist @ ik.wrist_local       # type: ignore[attr-defined]
         v_vec = wrist_t - ik.shoulder                         # type: ignore[attr-defined]
         dist = np.linalg.norm(v_vec, axis=-1)
         reach_ok = ((dist >= 1e-6)

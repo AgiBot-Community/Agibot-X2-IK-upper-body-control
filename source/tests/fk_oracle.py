@@ -36,6 +36,10 @@ class IndependentFK:
         self.high = np.array([float(j.find("limit").get("upper")) for j in active])
 
     def pose(self, q):
+        result = list(self.link_frames(q))[-1][1]
+        return result[:3, 3], result[:3, :3]
+
+    def link_frames(self, q):
         values = dict(zip(self.names, q))
         result = np.eye(4)
         for joint in self.chain:
@@ -53,7 +57,30 @@ class IndependentFK:
                 vector = [1, 0, 0] if axis is None else np.fromstring(axis.get("xyz"), sep=" ")
                 motion[:3, :3] = rotation(vector, float(values[joint.get("name")]))
             result = result @ fixed @ motion
-        return result[:3, 3], result[:3, :3]
+            yield joint.find("child").get("link"), result.copy()
+
+
+class IndependentGravity(IndependentFK):
+    """Potential energy from XML inertials and independent chain transforms."""
+    def __init__(self, xml, side):
+        super().__init__(xml, side)
+        self.inertials = {}
+        for link in ET.fromstring(xml).findall("link"):
+            inertial = link.find("inertial")
+            if inertial is None:
+                continue
+            origin = inertial.find("origin")
+            com = (np.zeros(3) if origin is None else
+                   np.fromstring(origin.get("xyz", "0 0 0"), sep=" "))
+            self.inertials[link.get("name")] = float(inertial.find("mass").get("value")), com
+
+    def potential_energy(self, q, gravity):
+        energy = 0.
+        for name, transform in self.link_frames(q):
+            mass, com = self.inertials[name]
+            position = transform[:3, 3] + transform[:3, :3] @ com
+            energy -= mass * float(np.dot(gravity, position))
+        return energy
 
 
 def errors(actual, expected):

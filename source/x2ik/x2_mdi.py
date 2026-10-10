@@ -33,9 +33,6 @@ def validate_args(args):
     relax = getattr(args, "relax", 90.)
     if not math.isfinite(relax) or not 0 <= relax <= 180:
         raise ValueError("--relax 必须是 0 到 180 之间的有限数")
-    payload = getattr(args, "payload", 0.)
-    if not math.isfinite(payload) or payload < 0:
-        raise ValueError("--payload 必须是有限非负数")
 
 
 def is_urs(action):

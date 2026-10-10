@@ -3,8 +3,8 @@
 # Set X2IK_CONFIG to this robot's own configuration path.
 # Default: help only. --dry: ROS feedback subscription, no motion publication.
 # --execute: live MDI control, including continuous holding in an online session.
-# Optional TCP: --tcp-mode none|hand|gripper|custom [--tcp-file /robot/tool.json].
-# TCP changes the target frame, not finger/gripper actuation. URS is required.
+# Only the robot wrist origin is supported. Each end-effector needs separate
+# gravity-compensation analysis; this project does not generalize across them.
 set -eu
 
 case "${1:-}" in
@@ -20,7 +20,7 @@ case "${1:-}" in
         exec python3 -m x2ik mdi "$@"
         ;;
     *)
-        printf '%s\n' 'Usage: sh mdi_minimal.sh [--dry|--execute] [--side left|right] [--tcp-mode none|hand|gripper|custom] [--tcp-file /robot/tool.json] [--duration 8] [--settle 2]' >&2
+        printf '%s\n' 'Usage: sh mdi_minimal.sh [--dry|--execute] [--side left|right] [--duration 8] [--settle 2]' >&2
         exit 2
         ;;
 esac

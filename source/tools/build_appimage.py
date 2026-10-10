@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Build a native desktop AppImage, with Python/Qt and an SSH executable.
 
-Prerequisites: PyInstaller, PyQt5, mksquashfs and official appimagetool AppImage.
+Prerequisites: PyInstaller, PyQt5, mksquashfs, official appimagetool AppImage
+and the statically linked AppImage/type2-runtime runtime-x86_64.
 For reproducible releases record the tool hashes printed into BUILD_INFO.json.
 """
 import argparse
@@ -25,11 +26,20 @@ def run(args, **kwargs):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--appimagetool', required=True, type=Path)
+    ap.add_argument('--runtime-file', required=True, type=Path,
+                    help='Official static type2-runtime runtime-x86_64 (no host libfuse2 dependency)')
     ap.add_argument('--pyinstaller-path', type=Path, help='Optional pip --target directory')
     args = ap.parse_args()
     if platform.machine() != 'x86_64':
         ap.error('Build this Linux x86_64 artifact on x86_64')
     tool = args.appimagetool.resolve()
+    runtime = args.runtime_file.resolve()
+    if not runtime.is_file():
+        ap.error('--runtime-file must be an existing runtime-x86_64 file')
+    # Older appimagetool binaries embed a runtime that dlopens libfuse.so.2.
+    # Select the standalone static runtime explicitly instead of inheriting it.
+    runtime_version = subprocess.check_output(
+        [str(runtime), '--appimage-version'], text=True, stderr=subprocess.STDOUT).strip()
     env = dict(os.environ)
     # Keep unrelated user-site backports out of PyInstaller's analysis.
     env['PYTHONNOUSERSITE'] = '1'
@@ -43,7 +53,7 @@ def main():
         run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir',
              '--name', 'x2-mdi-desktop', '--distpath', work/'frozen', '--workpath', work/'work',
              '--specpath', work, '--add-binary', '/usr/bin/ssh:bin',
-             '--paths', ROOT, '--add-data', str(ROOT/'assets') + ':assets',
+             '--paths', ROOT,
              '--add-data', str(ROOT/'desktop/assets') + ':assets',
              ROOT/'desktop/x2_mdi_desktop.py'], env=env)
         appdir = work/'X2-MDI.AppDir'
@@ -68,14 +78,12 @@ Categories=Development;Engineering;
         for name, path in {'Qt-PyQt5': '/usr/share/doc/python3-pyqt5/copyright',
                            'OpenSSH': '/usr/share/doc/openssh-client/copyright',
                            'NumPy': '/usr/share/doc/python3-numpy/copyright',
+                           'AppImage-runtime': ROOT.parent/'licenses/AppImage-runtime',
                            'Model-provenance.md': ROOT/'desktop/assets/README.md',
                            'Third-party-notices.md': ROOT/'THIRD_PARTY_NOTICES.md'}.items():
             if Path(path).is_file():
                 shutil.copy2(path, appdir/'usr/licenses'/name)
-        # Reuse the utility's official type-2 runtime; no hidden network downloads.
-        offset = int(subprocess.check_output([str(tool), '--appimage-offset'], text=True).strip())
-        runtime = work/'runtime-x86_64'
-        runtime.write_bytes(tool.read_bytes()[:offset])
+        # The supplied runtime is embedded verbatim; no hidden network downloads.
         run([tool, '--appimage-extract'], cwd=work, stdout=subprocess.DEVNULL)
         target = output/'X2-MDI-2.1.0-x86_64.AppImage'
         staged_target = work/target.name
@@ -90,6 +98,9 @@ Categories=Development;Engineering;
         info = dict(artifact=target.name, sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
                     architecture=platform.machine(), libc=platform.libc_ver(),
                     appimagetool_sha256=hashlib.sha256(tool.read_bytes()).hexdigest(),
+                    runtime_sha256=hashlib.sha256(runtime.read_bytes()).hexdigest(),
+                    runtime_version=runtime_version,
+                    build_script_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                     desktop_source_sha256=hashlib.sha256((ROOT/'desktop/x2_mdi_desktop.py').read_bytes()).hexdigest())
         info['desktop_sources_sha256'] = {
             p.name: hashlib.sha256(p.read_bytes()).hexdigest()
@@ -97,9 +108,11 @@ Categories=Development;Engineering;
         }
         info['support_files_sha256'] = {
             p.relative_to(ROOT).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in [ROOT/'x2_tcp.py', ROOT/'assets/tcp_presets.json', ROOT/'THIRD_PARTY_NOTICES.md',
+            for p in [ROOT/'THIRD_PARTY_NOTICES.md',
                       *sorted((ROOT/'desktop/assets').glob('*'))] if p.is_file()
         }
+        info['runtime_license_sha256'] = hashlib.sha256(
+            (ROOT.parent/'licenses/AppImage-runtime').read_bytes()).hexdigest()
         (output/'APPIMAGE_BUILD_INFO.json').write_text(json.dumps(info, indent=2)+'\n')
         print(json.dumps(info, indent=2))
 

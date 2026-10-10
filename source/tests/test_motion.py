@@ -4,8 +4,9 @@ from unittest.mock import patch
 
 import numpy as np
 
-from fk_oracle import IndependentFK, errors
+from fk_oracle import IndependentFK, IndependentGravity, errors
 from x2ik.x2_api import HOME
+from x2ik.x2_arm_dynamics import ArmDynamics
 from x2ik.x2_arm_model import ArmModel, DEFAULT_URDF
 from x2ik.x2_srs_ik import SrsArmIK
 from x2ik import x2_sim_ros as motion
@@ -36,6 +37,24 @@ class MemoryClient:
 
 
 class MotionTests(unittest.TestCase):
+    def test_arm_only_gravity_matches_independent_potential_energy(self):
+        rng = np.random.default_rng(20261008)
+        for side in ('left', 'right'):
+            model = ArmModel(side)
+            oracle = IndependentGravity(DEFAULT_URDF.read_bytes(), side)
+            for gravity in (np.array([0., 0., -9.81]), np.array([2., -3., -8.])):
+                dynamics = ArmDynamics(model, gravity=gravity)
+                for index, q in enumerate(rng.uniform(oracle.low, oracle.high, (5, 7))):
+                    with self.subTest(side=side, gravity=gravity.tolist(), index=index):
+                        step = 1e-6
+                        expected = np.array([
+                            (oracle.potential_energy(q + delta, gravity)
+                             - oracle.potential_energy(q - delta, gravity)) / (2 * step)
+                            for delta in np.eye(7) * step
+                        ])
+                        np.testing.assert_allclose(dynamics.gravity_torque(q), expected,
+                                                   rtol=2e-6, atol=2e-7)
+
     def test_original_cartesian_loop_with_local_ik(self):
         for side in ('left', 'right'):
             with self.subTest(side=side):

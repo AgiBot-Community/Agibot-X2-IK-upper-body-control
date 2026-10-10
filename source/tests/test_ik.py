@@ -11,11 +11,11 @@ import numpy as np
 
 from fk_oracle import IndependentFK, errors
 from x2ik.x2_api import X2Arm, HOME
-from x2ik.x2_arm_model import ArmModel, DEFAULT_URDF, matrix_to_rpy, rpy_to_matrix
+from x2ik.x2_arm_dynamics import ArmDynamics
+from x2ik.x2_arm_model import ArmModel, DEFAULT_URDF, matrix_to_rpy
 from x2ik.x2_mdi import PureIKWorker, _solve_pose
 from x2ik.x2_mdi_bridge import Bridge, Transport
 from x2ik.x2_srs_ik import SrsArmIK, IKSolution, branch_tuple
-from x2ik.x2_tcp import load_tcp_tools
 
 
 class SolverTests(unittest.TestCase):
@@ -24,11 +24,9 @@ class SolverTests(unittest.TestCase):
         cls.fixtures = json.loads((Path(__file__).parent / 'fixtures/wrist_regression.json').read_text())
         cls.oracles = {s: IndependentFK(DEFAULT_URDF.read_bytes(), s) for s in ('right', 'left')}
 
-    def check_solution(self, sol, pose, oracle, offset=None, rotation=None):
+    def check_solution(self, sol, pose, oracle):
         self.assertIsInstance(sol, IKSolution)
         actual = oracle.pose(sol.q)
-        if offset is not None:
-            actual = (actual[0] + actual[1] @ offset, actual[1] @ rotation)
         pe, re = errors(actual, pose)
         self.assertLessEqual(pe, 0.01)
         self.assertLessEqual(re, 0.001)
@@ -180,22 +178,104 @@ class SolverTests(unittest.TestCase):
             self.assertIsNone(solver.solve(*pose, q_seed=seed,
                                           fallback_numeric=False, max_joint_step_rad=bound))
 
-    def test_tool_translation_and_rotation(self):
+    def test_wrist_origin_poses(self):
         rng = np.random.default_rng(7101)
-        for mode in ('none', 'hand', 'gripper', 'custom'):
-            tools = load_tcp_tools('none' if mode == 'custom' else mode)
-            for side, oracle in self.oracles.items():
-                offset = np.array(tools[side]['translation_m'])
-                rotation = np.array(tools[side]['rotation_matrix'])
-                if mode == 'custom':
-                    offset = np.array([.03, -.01, -.18])
-                    rotation = rpy_to_matrix([.2, -.1, .3])
-                solver = SrsArmIK(ArmModel(side, tcp_offset=offset, tcp_rotation=rotation))
-                for index, q in enumerate(rng.uniform(oracle.low, oracle.high, (12, 7))):
-                    with self.subTest(mode=mode, side=side, index=index):
-                        p, r = oracle.pose(q)
-                        pose = p + r @ offset, r @ rotation
-                        self.check_solution(solver.solve(*pose), pose, oracle, offset, rotation)
+        for side, oracle in self.oracles.items():
+            model = ArmModel(side)
+            solver = SrsArmIK(model)
+            for index, q in enumerate(rng.uniform(oracle.low, oracle.high, (12, 7))):
+                with self.subTest(side=side, index=index):
+                    pose = oracle.pose(q)
+                    self.check_solution(solver.solve(*pose), pose, oracle)
+
+    def test_removed_end_effector_tcp_modes_are_rejected(self):
+        from x2ik import Robot
+        from x2ik.__main__ import main as cli_main
+        from x2ik.x2_mdi_bridge import validate_request
+
+        for field, value in (("tcp_mode", "custom"), ("tcp_file", "tool.json"),
+                             ("tcp_offset", [0., 0., -.1]), ("payload", .5),
+                             ("payload_com", [0., 0., -.1]), ("hand_mode", 2),
+                             ("hand_sub_mode", 1), ("hand_pos", [0., 0.])):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "腕原点"):
+                validate_request({"id": 1, "op": "mdi", "mode": "j", "side": "right",
+                                  "values": [0.] * 7, field: value})
+
+        for mode in ('hand', 'gripper', 'custom'):
+            with self.subTest(mode=mode, entry='Robot'), \
+                 patch('x2ik.x2_movej._X2Arm') as arm:
+                with self.assertRaises(TypeError):
+                    Robot(tcp_mode=mode)
+                arm.assert_not_called()
+            with self.subTest(mode=mode, entry='Bridge'), \
+                 patch.object(Bridge, '_connect') as connect:
+                with self.assertRaises(TypeError):
+                    Bridge(Transport(io.StringIO(), io.StringIO()), tcp_mode=mode)
+                connect.assert_not_called()
+            for entry in ('movej', 'mdi'):
+                with self.subTest(mode=mode, entry=entry), \
+                     patch('sys.stderr', new_callable=io.StringIO) as stderr:
+                    with self.assertRaises(SystemExit) as rejected:
+                        cli_main([entry, '--tcp-mode', mode])
+                    self.assertEqual(rejected.exception.code, 2)
+                    self.assertIn('unrecognized arguments', stderr.getvalue())
+
+        with patch('x2ik.x2_movej._X2Arm') as arm:
+            with self.assertRaises(TypeError):
+                Robot(tcp_file='removed-tool.json')
+            arm.assert_not_called()
+        with patch.object(Bridge, '_connect') as connect:
+            with self.assertRaises(TypeError):
+                Bridge(Transport(io.StringIO(), io.StringIO()), tcp_file='removed-tool.json')
+            connect.assert_not_called()
+        with patch.object(X2Arm, '_connect') as connect:
+            for option in ({'tcp_offset': [0., 0., -.1]}, {'payload': .5}):
+                with self.subTest(option=next(iter(option))), self.assertRaises(TypeError):
+                    X2Arm(**option)
+            connect.assert_not_called()
+        for option in ({'tcp_offset': [0., 0., -.1]}, {'tcp_rotation': np.eye(3)}):
+            with self.subTest(option=next(iter(option))), self.assertRaises(TypeError):
+                ArmModel(**option)
+        for entry in ('movej', 'mdi'):
+            with self.subTest(entry=entry, option='tcp_file'), \
+                 patch('sys.stderr', new_callable=io.StringIO) as stderr:
+                with self.assertRaises(SystemExit) as rejected:
+                    cli_main([entry, '--tcp-file', 'removed-tool.json'])
+                self.assertEqual(rejected.exception.code, 2)
+                self.assertIn('unrecognized arguments', stderr.getvalue())
+        model = ArmModel('right')
+        for option in ({'payload_mass': .5}, {'payload_com': [0., 0., -.1]}):
+            with self.subTest(option=next(iter(option))), self.assertRaises(TypeError):
+                ArmDynamics(model, **option)
+        with self.assertRaises(TypeError):
+            ArmDynamics(model).gravity_torque(HOME, include_payload=True)
+        from x2ik import x2_sim_ros
+        for option, value in (('--payload', '.5'), ('--hand-mode', '2')):
+            with self.subTest(option=option), \
+                 patch('sys.stderr', new_callable=io.StringIO) as stderr:
+                with self.assertRaises(SystemExit) as rejected:
+                    x2_sim_ros.main([option + '=' + value, 'mdi'])
+                self.assertEqual(rejected.exception.code, 2)
+                self.assertIn('unrecognized arguments', stderr.getvalue())
+        for option in ({'payload': .5}, {'hand_mode': 2}):
+            with self.subTest(option=next(iter(option))), self.assertRaises(TypeError):
+                x2_sim_ros.X2ArmClient('upper_body', **option)
+
+    def test_default_robot_uses_wrist_origin_without_tcp_configuration(self):
+        from x2ik import Robot
+
+        result = {'q': HOME.copy()}
+        with patch('x2ik.x2_movej._X2Arm') as arm:
+            arm.return_value.R_move_J.return_value = result
+            with Robot(verbose=False) as robot:
+                for mode in ('hand', 'gripper', 'custom'):
+                    with self.subTest(mode=mode), self.assertRaises(TypeError):
+                        robot.moveJ(HOME, tcp_mode=mode)
+                arm.return_value.R_move_J.assert_not_called()
+                self.assertIs(robot.moveJ(HOME, side='right'), result)
+            arm.assert_called_once()
+            arm.return_value.R_move_J.assert_called_once_with(HOME, duration=8.0, settle=2.0)
+            arm.return_value.close.assert_called_once_with()
 
     def test_original_api_and_mdi_use_integrated_solver(self):
         row = self.fixtures['arms']['left'][5]

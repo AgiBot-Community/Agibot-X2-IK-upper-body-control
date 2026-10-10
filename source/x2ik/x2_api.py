@@ -39,7 +39,6 @@ MDI 操作前端同时保留，入口 ./x2ik.py mdi，说明见 MDI_GUIDE.md。
 from __future__ import annotations
 
 import math
-import copy
 import os
 import threading
 import time
@@ -53,7 +52,6 @@ from .x2_arm_model import ArmModel, matrix_to_rpy, rpy_to_matrix
 from .x2_srs_ik import SrsArmIK
 from .x2_frames import HOME_Q
 from .x2_compensation import fixed_compensation
-from .x2_tcp import load_tcp_tools
 
 #: 待机位关节角 (rad),7 个。move_j 的默认目标。
 HOME = HOME_Q.copy()
@@ -144,6 +142,8 @@ class X2Arm:
     加重力补偿；这不保证另一臂的实际位置绝对不变。不要并行运行其他控制器。
     方法执行期间持续发布，返回后不后台保位。返回误差是结束瞬间的测量，
     空闲超过 mc 的约 200 ms 指令有效期后，闭环修正可能不再保持。
+    所有末端位姿固定为机器人腕原点，不提供工具配置；不同末端需单独
+    建模、解析并验证重力补偿，本项目不支持泛化。
 
     参数
     ----
@@ -153,7 +153,6 @@ class X2Arm:
     stiffness / bias_limit_deg / gravity_source : 显式值 > 按 SN 配置 > 内置默认。
         默认 40 N·m/rad / 8 deg / chest。当前 SN 配置是 40 / 12 deg / pelvis。
         bias_limit_deg=0 表示不补重力。静态参数不保证 1 mm。
-    tcp_offset : TCP 相对腕 roll 连杆的固定外参 (m)。装手后必须实测标定。
     robot_sn : 显式 SN；不给则从环境及 x2ik.conf 读取 X2_ROBOT_SN。
     """
 
@@ -164,25 +163,15 @@ class X2Arm:
                  stiffness: Optional[float] = None,
                  bias_limit_deg: Optional[float] = None,
                  gravity_source: Optional[str] = None,
-                 tcp_offset: Optional[Sequence[float]] = None,
-                 payload: float = 0.0,
                  verbose: bool = True, *, robot_sn: Optional[str] = None,
-                 _fixed_compensation: bool = False, _tcp_tools=None):
+                 _fixed_compensation: bool = False):
         if side not in ("left", "right"):
             raise ValueError("side 必须是 'left' 或 'right'")
         self.side = side
         self.verbose = verbose
         if connect and mode != "upper_body":
             raise ValueError("X2Arm 连接只允许 upper_body；本轮禁止状态切换和关节直控")
-        offset = None if tcp_offset is None else _vector(tcp_offset, 3, "tcp_offset")
-        if offset is not None and _tcp_tools is not None:
-            raise ValueError("tcp_offset 与 _tcp_tools 不能同时提供")
-        tools = load_tcp_tools() if _tcp_tools is None else copy.deepcopy(_tcp_tools)
-        if offset is not None:
-            tools[side].update(translation_m=offset.tolist(), mode="custom",
-                               name="legacy tcp_offset", source="explicit tcp_offset")
-        self.models, self.iks = self._build_tcp_models(tools)
-        self._tcp_tools = tools
+        self.models, self.iks = self._build_wrist_models()
         self.model, self.solver = self.models[side], self.iks[side]
         self.cli = None
         self._ros = None
@@ -193,36 +182,14 @@ class X2Arm:
         self._send_uncertain = False
         self._motion_lock = threading.Lock()
         if connect:
-            self._connect(mode, stiffness, bias_limit_deg, gravity_source, payload)
+            self._connect(mode, stiffness, bias_limit_deg, gravity_source)
 
     @staticmethod
-    def _build_tcp_models(tools):
-        if not isinstance(tools, dict) or set(tools) != {"left", "right"}:
-            raise ValueError("TCP 工具必须同时提供 left 和 right")
-        models = {side: ArmModel(side, tcp_offset=tools[side]["translation_m"],
-                                 tcp_rotation=tools[side]["rotation_matrix"])
-                  for side in ("left", "right")}
+    def _build_wrist_models():
+        models = {side: ArmModel(side) for side in ("left", "right")}
         return models, {side: SrsArmIK(model) for side, model in models.items()}
 
-    def _set_tcp_tools(self, tools):
-        """Replace both kinematic models atomically, never during an active motion.
-
-        Dynamics retain the physical wrist models created at connection time;
-        selecting a reporting/target frame must not alter gravity compensation.
-        """
-        tools = copy.deepcopy(tools)
-        models, iks = self._build_tcp_models(tools)
-        if not self._motion_lock.acquire(blocking=False):
-            raise RuntimeError("运动期间不能更改 TCP 工具")
-        try:
-            self.models, self.iks, self._tcp_tools = models, iks, tools
-            self.model, self.solver = models[self.side], iks[self.side]
-            if self.cli is not None:
-                self.cli.models, self.cli.iks = models, iks
-        finally:
-            self._motion_lock.release()
-
-    def _connect(self, mode, stiffness, bias_limit_deg, gravity_source, payload):
+    def _connect(self, mode, stiffness, bias_limit_deg, gravity_source):
         active = self._connected() if self._connected is not None else None
         if active is not None and active.cli is not None:
             raise RuntimeError("同一进程只能连接一个 X2Arm；请复用实例或先 close()")
@@ -256,15 +223,13 @@ class X2Arm:
             raise ValueError("bias_limit_deg 必须在 0 到 180 度之间")
         if gravity_source not in ("chest", "pelvis", "static"):
             raise ValueError("gravity_source 必须为 chest / pelvis / static")
-        if not math.isfinite(payload) or payload < 0:
-            raise ValueError("payload 必须是有限非负数")
         self.connection_config = dict(robot_sn=self.robot_sn, stiffness=stiffness,
                                       bias_limit_deg=bias_limit_deg,
-                                      gravity_source=gravity_source, payload=payload)
+                                      gravity_source=gravity_source)
         k = None if stiffness is None else np.full(7, float(stiffness))
         try:
             self.cli = ros.X2ArmClient(mode, ros.DEFAULT_ARM_ORDER,
-                                   joint_stiffness=k, payload=payload,
+                                   joint_stiffness=k,
                                    gravity_source=gravity_source,
                                    bias_limit=math.radians(bias_limit_deg),
                                    verbose=self.verbose)
@@ -462,8 +427,7 @@ class X2Arm:
             result[side].update(q=measured, err=error, err_max=float(np.max(np.abs(error))),
                                 tau=client.tau(side), stale=False)
             pos, rot = self.models[side].forward_kinematics(measured)
-            result[side].update(tcp=copy.deepcopy(self._tcp_tools[side]),
-                                position_m=pos.tolist(), rotation_matrix=rot.tolist(),
+            result[side].update(position_m=pos.tolist(), rotation_matrix=rot.tolist(),
                                 pose_frame="torso_link")
         return result
 

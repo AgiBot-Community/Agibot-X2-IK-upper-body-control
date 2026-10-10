@@ -3,7 +3,7 @@
 
 模型在 torso_link 中描述肩、肘、腕几何，给定 SEW 臂角后枚举肘部、
 肩部和腕部解析分支，按限位及代价筛选，左腕轴并非严格共点，解析候选
-必须用完整 URDF 和所选 TCP 的 FK 复核。
+必须用完整 URDF 的腕原点 FK 复核。
 
 solve 保持已满足目标的种子，优先局部求解，并对漏解做有限次恢复，
 track 使用有限迭代与 SEW 邻域搜索，检查分支、残差和关节步长，
@@ -245,8 +245,7 @@ class SrsArmIK:
             0.5 * (model.q_min + model.q_max),
             rng.uniform(model.q_min, model.q_max, (self.RECOVERY_RESTARTS, 7)),
         ))
-        self._max_reach = (sum(np.linalg.norm(g.origin_xyz) for g in model.geoms)
-                           + np.linalg.norm(model.tcp_offset))
+        self._max_reach = sum(np.linalg.norm(g.origin_xyz) for g in model.geoms)
 
     def _reach_under_limits(self) -> Tuple[float, float]:
         """在肘关节限位范围内扫一遍 |S->W|,给出真实可达的伸展区间。"""
@@ -259,10 +258,8 @@ class SrsArmIK:
     # ---------- 几何辅助 ----------
 
     def target_wrist_center(self, pos: np.ndarray, rot: np.ndarray) -> np.ndarray:
-        """由 TCP 目标位姿反推腕心:先去掉 TCP 外参回到末端连杆原点,再加腕心偏置。"""
-        rot_wrist = np.asarray(rot, float) @ self.model.tcp_rotation.T
-        ee_origin = np.asarray(pos, float) - rot_wrist @ self.model.tcp_offset
-        return ee_origin + rot_wrist @ self.wrist_local
+        """由腕 roll 连杆目标位姿和模型固有偏置计算腕三轴交点。"""
+        return np.asarray(pos, float) + np.asarray(rot, float) @ self.wrist_local
 
     def reach_of(self, pos: np.ndarray, rot: np.ndarray) -> float:
         """目标位姿对应的肩-腕距离。用于在下发前判可达性。"""
@@ -290,8 +287,7 @@ class SrsArmIK:
             return pos, False
         target = hi if dist > hi else lo
         wrist_new = self.shoulder + vec * (target / dist)
-        rot_wrist = rot @ self.model.tcp_rotation.T
-        return wrist_new + rot_wrist @ (self.model.tcp_offset - self.wrist_local), True
+        return wrist_new - rot @ self.wrist_local, True
 
     def _sew_basis(self, v_hat: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """给定 S->W 单位向量,构造 SEW 角的零相位基 (n̂, b̂)。"""
@@ -397,7 +393,7 @@ class SrsArmIK:
         v_hat = v_vec / distance
         n_hat, b_hat = self._sew_basis(v_hat)
         a4 = self.axes0[3]
-        rot_ee_target = rot @ self.model.tcp_rotation.T
+        rot_ee_target = rot
 
         out: List[IKSolution] = []
         for elbow_branch, q4 in enumerate(self.elbow_angles(distance)):
@@ -456,9 +452,8 @@ class SrsArmIK:
         FK 与 SEW 角共用同一次串联(_sew_from_frames),不再各串一遍。
         """
         positions, rotations = self.model.joint_frames(q)
-        rot_wrist = rotations[-1]
-        fk_rot = rot_wrist @ self.model.tcp_rotation
-        fk_pos = positions[-1] + rot_wrist @ self.model.tcp_offset
+        fk_rot = rotations[-1]
+        fk_pos = positions[-1]
         err = np.empty(7)
         err[:3] = pos - fk_pos
         err[3:6] = log3(rot @ fk_rot.T)
@@ -470,9 +465,8 @@ class SrsArmIK:
                         target_psi: float) -> np.ndarray:
         """_residual 的批量版,(N,7) -> (N,7)。LM 的阻尼试探靠它一次算完。"""
         positions, rotations = self.model.joint_frames_batch(q_arr)
-        rot_wrist = rotations[..., -1, :, :]
-        fk_rot = rot_wrist @ self.model.tcp_rotation
-        fk_pos = positions[..., -1, :] + rot_wrist @ self.model.tcp_offset
+        fk_rot = rotations[..., -1, :, :]
+        fk_pos = positions[..., -1, :]
         err = np.empty(q_arr.shape[:-1] + (7,))
         err[..., :3] = pos - fk_pos
         err[..., 3:6] = log3_batch(rot @ np.swapaxes(fk_rot, -1, -2))

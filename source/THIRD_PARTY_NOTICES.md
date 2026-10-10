@@ -11,21 +11,25 @@ visual assets, not STEP solids or collision geometry.
 
 Runtime dependencies include Python and NumPy; online robot operation additionally
 requires the operator's existing ROS 2 / AimDK message installation. Desktop builds
-use PyQt5/Qt, OpenSSH, PyInstaller and AppImage tooling. Their licenses apply to their
+use PyQt5/Qt, OpenSSH, PyInstaller, AppImage tooling and AppImage type-2 runtime. Their licenses apply to their
 respective components; the delivery builder includes available distribution notices.
+
+The AppImage embeds the statically linked `runtime-x86_64` from
+`AppImage/type2-runtime` (commit `8f39b89`). It avoids a host `libfuse.so.2`
+dependency. The upstream license (including bundled component links) is retained
+in `licenses/AppImage-runtime` and the AppImage's `usr/licenses/AppImage-runtime`.
+Runtime source: https://github.com/AppImage/type2-runtime/tree/8f39b89.
 
 This notice does not grant a new license to third-party components or to the
 project's own code. Preserve the upstream notices when redistributing model files.
 
-V2.1 TCP preset provenance is recorded in `assets/tcp_presets.json`:
-
-- Hand reference geometry comes from the user-supplied `agibot_x2_hand/scene.urdf`
-  and companion `x2_31dof_omnihand_2.xml`. The cup grasp center is an explicitly
-  estimated application point; it is not an upstream calibrated TCP. Its arm
-  kinematic geometry is not imported into the solver.
-- Gripper nominal center transforms are composed from explicit fixed links in
-  `omnipicker_omnipicker/x2_ultra_plus_omnipicker_omnipicker.urdf`.
-- Only the necessary TCP transforms, provenance and derived arm visualization
-  are included; no license for the entire user-supplied asset trees is inferred
-  from the existing base URDF notice. Recipients must retain source notices and
-  the applicable rights for any third-party assets they redistribute.
+The derived arm visualization meshes come from the 14 arm STL files referenced
+by the user-supplied
+`omnipicker_omnipicker/x2_ultra_plus_omnipicker_omnipicker.urdf`.
+Source filenames, SHA-256 hashes and conversion metadata are preserved in
+`desktop/assets/arm_meshes.json`; the asset README records the derivation.
+These assets provide arm visualization only; the source model does not replace
+the solver's base kinematics or add end-effector support.
+No license for the entire user-supplied asset trees is inferred from the existing
+base URDF notice. Recipients must retain source notices and the applicable rights
+for any third-party assets they redistribute.

@@ -5,10 +5,10 @@
 
 首次了解项目请先阅读[项目整体介绍与逆运动学原理](docs/PROJECT_OVERVIEW.md)。
 仅在 URS 模式下支持运动，客户须自行切换；MDI 不带模式切换功能。
-产品版本 V2.1，机器人模块版本 `2.1.1`，桌面客户端版本 `2.1.0`，源码工作分支 `V2.0`。
+产品版本 V2.1，机器人模块版本 `2.1.1`，桌面客户端版本 `2.1.0`，源码基线 `community/V2.1.1 @ 2f6302e`。
 
 2.1.1 将位姿复核、原位保持和局部连续求解并入原有 IK，MDI 直接使用更新后的求解器，
-无需另装验证模块。Python `Robot.moveJ()` 的调用方式及返回字段保持不变，关节目标仍走关节空间插值。
+无需另装验证模块。Python `Robot.moveJ()` 的关节目标仍走关节空间插值，当前公开接口已移除末端工具参数。
 
 ## 交付内容
 
@@ -26,22 +26,19 @@
 │   └── APPIMAGE_BUILD_INFO.json
 ├── examples/
 │   ├── movej_minimal.py
-│   ├── mdi_minimal.sh
-│   └── tcp_tool.example.json
+│   └── mdi_minimal.sh
 ├── docs/
 │   ├── PROJECT_OVERVIEW.md
 │   ├── MODULE_GUIDE.md
 │   ├── DESKTOP_MDI_GUIDE.md
 │   ├── COORDINATES.md
-│   ├── TCP_CALIBRATION_GUIDE.md
 │   └── IK_VALIDATION.md
 ├── source/
-│   ├── x2ik/                     完整机器人模块、模型及 TCP 预置
+│   ├── x2ik/                     完整机器人模块与模型
 │   ├── tests/                    离线回归测试和固定目标样本
 │   ├── pyproject.toml
-│   ├── tools/                    模块构建、包验证、桌面构建与 TCP 标定
-│   ├── desktop/                  桌面客户端源码
-│   └── x2_tcp.py / assets/        桌面及离线标定工具依赖
+│   ├── tools/                    模块构建、包验证与桌面构建
+│   └── desktop/                  桌面客户端源码
 ├── verification/                 安装包离线测试及源码哈希记录
 ├── licenses/                     随包组件的许可文件
 ├── THIRD_PARTY_NOTICES.txt
@@ -66,7 +63,7 @@ python3 -m x2ik movej
 最后一条默认只打印 HOME 目标，不连接或运动。需由现场维护者提供该机器的 `x2ik.conf`，
 并加载 ROS / AimDK 环境。客户 MDI / MoveJ 内置固定 `40 N·m/rad / 12° / pelvis` 补偿，
 不读取或要求创建 SN 标定文件。当前没有自动运动标定流程，固定参数也不代表新机精度验收。
-V2.1 支持四种 TCP 与离线平移拟合，见 [TCP 标定与文件填写](docs/TCP_CALIBRATION_GUIDE.md)。
+本项目仅支持机器人腕原点，不提供末端工具配置或标定。
 换机仍需核对型号、模型、有效反馈与 IMU，并分别验证两臂，具体见
 [模块指南](docs/MODULE_GUIDE.md#更换机器人与现场标定)。
 
@@ -90,7 +87,7 @@ python3 -m x2ik --help
 ```python
 from x2ik import Robot, HOME
 
-with Robot(tcp_mode="gripper") as robot:
+with Robot() as robot:
     result = robot.moveJ(HOME, side="right", duration=8, settle=2)
 ```
 
@@ -99,14 +96,14 @@ with Robot(tcp_mode="gripper") as robot:
 同时控制双臂使用同一个实例：
 
 ```python
-with Robot(tcp_mode="gripper") as robot:
+with Robot() as robot:
     result = robot.moveJ(q_left=HOME, q_right=HOME, duration=8, settle=2)
 ```
 
-默认 `tcp_mode="none"` 为腕原点。可选 `hand` 灵巧手近似杯子中心、`gripper` 夹爪名义中心，
-或 `custom` 配合 `tcp_file`。`moveJ(..., tcp_mode="hand")` 可顺序覆盖，省略时沿用当前选择。
-TCP 不改变七关节目标和 HOME；结果 `position_m/rotation_matrix/tcp` 报告所选工具的反馈 FK。
-手指/夹爪开合与工具质量适配不在此接口内。
+结果 `position_m/rotation_matrix` 报告机器人腕原点的反馈 FK。
+不同末端工具的机构、质量、质心与负载不同，
+必须针对具体工具单独建模、解析并验证重力补偿；本项目不支持跨末端工具泛化。
+在线控制为满足 MC 的双臂消息协议，会固定发送无配置入口的兼容字段；协议规定 `hand_pos=[0, 0]` 为夹爪闭合值，带末端运行前须现场确认。
 
 最简示例 `examples/movej_minimal.py` 默认离线，只有加 `--execute` 才连接并运动。
 在线运动要求机器人已处于 URS，其他控制会话已退出，现场路径已检查。
@@ -133,11 +130,10 @@ chmod +x desktop/X2-MDI-2.1.0-x86_64.AppImage
 ```
 
 `--demo` 离线展示界面。真实连接时在应用中设置自己的 SSH 目标、机器人项目目录与密钥。
-先用普通 SSH 验证主机身份并配置公钥认证。连接前选择 TCP；自定义填写机器人上的绝对 JSON 路径，
-`--demo` 才读取本机文件。更换工具需断开重连。桌面默认连接后只读显示双臂 3D 模型及数值反馈，
+先用普通 SSH 验证主机身份并配置公钥认证。桌面默认连接后只读显示双臂 3D 模型及数值反馈，
 显式启用发送后才允许下发。MDI 支持绝对位置/姿态、相对平移/旋转、关节目标与双臂 HOME。
 桌面 MDI 位置输入可选 m / mm，角度用 deg；这与 Python MoveJ 的 rad 不同。
-MDI 笛卡尔目标统一指所选 TCP；CLI 支持 `--tcp-mode` / `--tcp-file`。
+MDI 笛卡尔目标和反馈统一指对应侧机器人腕原点。
 目标预检使用原始位姿求解，返回前按完整模型复核位置、姿态和关节限位，
 当前姿态已经满足目标时保留原关节角，连续运动优先从上一帧进行局部求解。
 运动中保持解析分支检查和 0.05 rad 单帧关节变化上限，不启用全局备用种子，

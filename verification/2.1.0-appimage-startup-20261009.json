@@ -1,0 +1,44 @@
+{
+  "verified_at": "2026-10-09T16:12:37.397519+08:00",
+  "artifact": "desktop/X2-MDI-2.1.0-x86_64.AppImage",
+  "sha256": "0d21025441a4cded4aa633562bf8e24cde605913d3da34d5df58e31d3dc0de39",
+  "environment": {
+    "os": "Ubuntu 22.04.4 LTS",
+    "architecture": "x86_64",
+    "display_server": "X11",
+    "libfuse2_installed": false,
+    "libfuse3_available": true
+  },
+  "original_failure": "dlopen(): error loading libfuse.so.2; exit status 1 before application startup",
+  "runtime": {
+    "version": "AppImage runtime version: https://github.com/AppImage/type2-runtime/commit/8f39b89",
+    "sha256": "156f4bdbde9c52d01814600013e0a273f0118dc2de98975f3c8c63427ec79074",
+    "download_url": "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64",
+    "signature_verified_against_upstream_key": true,
+    "key_fingerprint": "570C77ACEA40C0F1B758902CBF96CCA56490F695"
+  },
+  "checks": {
+    "direct_help": {
+      "command": "./desktop/X2-MDI-2.1.0-x86_64.AppImage --help",
+      "exit_code": 0
+    },
+    "direct_xcb_smoke_test": {
+      "command": "QT_QPA_PLATFORM=xcb ./desktop/X2-MDI-2.1.0-x86_64.AppImage --smoke-test",
+      "exit_code": 0,
+      "output": "x2-mdi-desktop smoke-test ok: Qt window, dual-arm wrist FK, preview, explicit arm, MDI/HOME, wrist-frame/busy/stale gates, shutdown; no SSH"
+    },
+    "extract_and_run_help": {
+      "command": "./desktop/X2-MDI-2.1.0-x86_64.AppImage --appimage-extract-and-run --help",
+      "exit_code": 0
+    },
+    "normal_desktop_startup": {
+      "command": "./desktop/X2-MDI-2.1.0-x86_64.AppImage",
+      "process_running": true,
+      "window_verified_by": "xwininfo -root -tree",
+      "window_title": "X2 · MDI V2.1 桌面控制台",
+      "startup_log_empty": true
+    },
+    "build_metadata_sources_and_embedded_license": true
+  },
+  "robot_connection_or_motion": false
+}

@@ -40,7 +40,8 @@ CONVERGE_TEST_GUIDE.md；对外封装见 x2_api.py / API_INTERFACE.md。
     torso 系，X 前 / Y 左 / Z 上；位置 m，CLI 姿态 deg。
     RX / RY / RZ 为固定轴 X-Y-Z 欧拉角，R = Rz @ Ry @ Rx。
     --rpy 是绝对姿态，--drpy 是待机姿态加 torso 系旋转增量。
-    默认 TCP 为 wrist_roll_link；手或夹爪外参需单独测量。
+    TCP 固定为 wrist_roll_link；不提供末端工具配置或标定。
+    不同末端工具需单独建模、解析并验证重力补偿，本项目不支持末端工具泛化。
     pos_err 是反馈关节角经 URDF FK 的 TCP 位置误差，不含装配误差；
     真实世界 1 mm 需要外部测量。方法返回后不后台持续保位。
 """
@@ -205,8 +206,8 @@ class X2ArmClient:
     def __init__(self, mode: str, arm_order: Sequence[str] = DEFAULT_ARM_ORDER,
                  gravity_ff_scale: float = 0.8, kp: float = OFFICIAL_KP, kd: float = OFFICIAL_KD,
                  joint_stiffness: Optional[np.ndarray] = None,
-                 payload: float = 0.0, gravity_source: str = "chest",
-                 hand_mode: int = 1, bias_limit: float = math.radians(8.0),
+                 gravity_source: str = "chest",
+                 bias_limit: float = math.radians(8.0),
                  verbose: bool = True, read_only: bool = False):
         import rclpy
         from rclpy.node import Node
@@ -221,7 +222,6 @@ class X2ArmClient:
         self.arm_order = list(arm_order)
         if len(self.arm_order) != 14:
             raise ValueError("arm_order 必须是 14 项(左 7 + 右 7)")
-        self.hand_mode = int(hand_mode)
         self.bias_limit = float(bias_limit)
 
         self.msg = dict(JointCommand=JointCommand, JointCommandArray=JointCommandArray,
@@ -293,7 +293,7 @@ class X2ArmClient:
 
         self.models = {s: ArmModel(s) for s in ("left", "right")}
         self.iks = {s: SrsArmIK(self.models[s]) for s in ("left", "right")}
-        self.dyns = {s: ArmDynamics(self.models[s], payload_mass=payload)
+        self.dyns = {s: ArmDynamics(self.models[s])
                      for s in ("left", "right")}
         self.gravity_ff_scale = gravity_ff_scale
         self.kp, self.kd = kp, kd
@@ -434,7 +434,7 @@ class X2ArmClient:
         #   1/2/3     -> mc 只读 arm_pos + hand_pos,head_pos 丢弃(配 URS 用)
         # 实测(生态课程 SDK, URS): 填 0 时 /aima/hal/joint/arm/command 恒为 0;
         # 填 1 时立刻变成我们给的值。所以想动手臂就**不能**填 0。
-        m.hand_sub_mode = self.hand_mode
+        m.hand_sub_mode = 1  # 固定协议兼容值，不提供末端模式选择。
         m.head_pos = list(self.head_pos)
         self.refresh_gravity()
         by_name = {}
@@ -455,11 +455,9 @@ class X2ArmClient:
                 by_name[f"{side}_{s}"] = float(v)
         # 按 arm_order 装配 —— 接口消费的是顺序,不是名字,歧义全集中在这一行
         m.arm_pos = [by_name[n] for n in self.arm_order]
-        # hand_pos 长度由 hand_sub_mode 决定;本脚本不控手,一律给"保持不动"的值。
-        m.hand_pos = {1: [0.0, 0.0],            # 夹爪: 左右张合度,0=闭
-                      2: [0.0] * 20,            # 灵巧手: 左右各 10 关节
-                      3: [0.0, 0.0, 0.0, 0.0],  # 手势: [左ID,左张合,右ID,右张合]
-                      }.get(self.hand_mode, [])
+        # 以下为接收端要求的协议兼容字段，不构成末端工具支持。
+        # 零值是历史协议值，不能宣称为保持当前末端姿态；模式 1 的零值语义为闭合。
+        m.hand_pos = [0.0, 0.0]
         self.pub.publish(m)
 
     def _send_joint(self, q_left: np.ndarray, q_right: np.ndarray,
@@ -2309,16 +2307,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--kd", type=float, default=OFFICIAL_KD,
                     help=f"方案二的 damping(默认 {OFFICIAL_KD} = 官方示例值)")
     ap.add_argument("--gravity-ff", type=float, default=0.8)
-    ap.add_argument("--payload", type=float, default=0.0)
     ap.add_argument("--stiffness", type=float, default=None,
                     help="方案一的等效关节刚度 N·m/rad(实测标定值),默认取 mc 的 40；MDI 固定 40")
     ap.add_argument("--no-reenter", dest="reenter", action="store_false",
                     help="mc 已经在上肢遥操 action 时不再重走进入序列。"
                          "默认会重走 —— action 名留在 URS 但实际没 armed 时,"
                          "不重走就表现成'全程没报错、手臂一动不动'。")
-    ap.add_argument("--hand-mode", type=int, default=1, choices=[0, 1, 2, 3],
-                    help="方案一的 hand_sub_mode。0=NONE(只吃 head_pos,手臂不动!) "
-                         "1=夹爪 2=灵巧手关节 3=手势。想动手臂必须非 0,默认 1。")
     ap.add_argument("--bias-limit", type=float, default=None,
                     help="方案一重力偏置的夹子 deg(工程命令默认 8，MDI 固定 12)。姿态需要的偏置 = "
                          "重力力矩/等效刚度,直臂侧平举要 11 deg,夹在 8 就会残 3 deg 下垂。"
@@ -2369,10 +2363,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.set_defaults(func=cmd_cartesian)
 
     p = sub.add_parser("mdi", help="交互式手动输入笛卡尔位姿(边输边动)")
-    from .x2_tcp import TCP_MODES
-    p.add_argument("--tcp-mode", choices=TCP_MODES,
-                   default="none", help="TCP 工具:无 / 灵巧手 / 夹爪 / 自定义")
-    p.add_argument("--tcp-file", help="custom 模式的 TCP 标定 JSON 文件")
     p.add_argument("--side", default="right", choices=["left", "right"],
                    help="先操作哪条臂,进去以后可以用 `side left/right` 换")
     p.add_argument("--duration", type=float, default=2.5, help="每次运动用时 s,进去可用 dur 改")
@@ -2474,17 +2464,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     args = ap.parse_args(argv)
     mdi_profile = None
-    mdi_models = mdi_iks = None
     if args.cmd == "mdi":
         from . import x2_mdi
         try:
             x2_mdi.validate_args(args)
-            from .x2_tcp import load_tcp_tools
-            tools = load_tcp_tools(args.tcp_mode, args.tcp_file)
-            mdi_models = {s: ArmModel(s, tcp_offset=t["translation_m"],
-                                      tcp_rotation=t["rotation_matrix"])
-                          for s, t in tools.items()}
-            mdi_iks = {s: SrsArmIK(m) for s, m in mdi_models.items()}
             mdi_profile = fixed_compensation()
             for option, key in (("stiffness", "stiffness"),
                                 ("bias_limit", "bias_limit_deg"),
@@ -2555,14 +2538,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     stiffness = None if stiffness_val is None else np.full(7, stiffness_val)
     cli = X2ArmClient(args.mode, order, args.gravity_ff, args.kp, args.kd,
-                      stiffness, args.payload, gravity_source,
-                      hand_mode=args.hand_mode,
+                      stiffness, gravity_source,
                       bias_limit=math.radians(bias_limit_deg))
     try:
-        if mdi_models is not None:
-            # TCP only changes FK/IK; dynamics retain their physical wrist frame.
-            cli.models, cli.iks = mdi_models, mdi_iks
-            cli.tcp_tools = tools
         # lateral 的"偏置夹子自动抬高"只在夹子还是内置默认值时才该动手。
         cli.reenter = args.reenter
         cli.bias_limit_explicit = (mdi_profile is not None or args.bias_limit is not None

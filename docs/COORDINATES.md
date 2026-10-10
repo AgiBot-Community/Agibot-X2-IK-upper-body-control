@@ -4,7 +4,8 @@
 
 ## 坐标系
 
-双臂 TCP 位置、姿态及 MDI 笛卡尔目标都在 `torso_link` 坐标系，两侧共用同一个原点。
+双臂腕原点位置、姿态及 MDI 笛卡尔目标都在 `torso_link` 坐标系，两侧共用同一个参考原点。
+本项目中的 TCP 固定为对应侧 `wrist_roll_link` 原点及坐标轴，不提供末端工具配置或标定。
 
 | 轴 | 正方向 |
 | --- | --- |
@@ -64,21 +65,11 @@ R = Rz(RZ) @ Ry(RY) @ Rx(RX)
 
 ## TCP 与误差口径
 
-默认 `none` 的 TCP 位于对应侧 `wrist_roll_link` 原点，平移零、旋转单位阵。
-V2.1 可选 `hand`（灵巧手近似杯子抓取中心）、`gripper`（夹爪模型名义中心）或 `custom`。
-手预置相对腕平移 `[0.035, 0, -0.150] m`；夹爪 `[0, 0, -0.17608] m`。
-这些数值在**本侧腕坐标**中，不能直接加到 torso 位置上；夹爪左右固定旋转不同。
-完整旋转、来源、标定与文件填写见 [TCP 标定指南](TCP_CALIBRATION_GUIDE.md)。
+MDI 的 `xyz/pose/d/R/t/rpy` 与反馈显示统一使用对应侧机器人腕原点及坐标轴。
+Python MoveJ 的 `position_m/rotation_matrix` 同样报告腕原点位姿。
+不同末端工具的机构、质量、质心与负载不同，
+必须单独建模、解析和验证重力补偿；本项目不支持跨末端工具泛化。
 
-```text
-p_tcp = p_wrist + R_wrist @ translation_m
-R_tcp = R_wrist @ rotation_matrix
-```
-
-MDI 的 `xyz/pose/d/R/t/rpy` 与反馈显示统一使用所选 TCP。
-Python MoveJ 的关节 `q` 和 HOME 不因工具变化，返回的 `position_m/rotation_matrix` 使用所选 TCP。
-手和夹爪预置是名义/估计点，非自动识别或实测抓取点，不包含手指开合或负载适配。
-
-界面 TCP 由关节反馈经模型 FK 得到，未包含未建模的装配偏差和工具外参误差。
+界面腕原点位姿由关节反馈经模型 FK 得到，未包含未建模的装配偏差，也不能表示工具工作点。
 Python `err_max` 是结束瞬间最大关节误差 rad，不是 TCP 毫米误差。
 当前 MoveJ 不包含 TCP 1 mm 闭环；历史的反馈 FK 误差也不能等同于外部真实定位精度。

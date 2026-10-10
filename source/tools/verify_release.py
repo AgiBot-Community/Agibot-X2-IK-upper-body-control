@@ -30,6 +30,14 @@ def run(command, *, cwd, env, input=None):
     return result.stdout + result.stderr
 
 
+def run_rejected(command, *, cwd, env):
+    result = subprocess.run(command, cwd=cwd, env=env, text=True,
+                            capture_output=True, timeout=180)
+    if result.returncode != 2 or 'unrecognized arguments' not in result.stderr:
+        raise RuntimeError(f'Expected CLI argument rejection: {command}\n'
+                           f'{result.stdout}\n{result.stderr}')
+
+
 def verify(module_dir):
     import numpy
 
@@ -95,9 +103,9 @@ def verify(module_dir):
         run([sys.executable, '-m', 'pip', 'install', '--no-index', '--no-deps', '--no-compile',
              '--target', str(installed), str(wheel)], cwd=work, env=env)
         for label, location in (('wheel', installed), ('runtime', work / 'runtime')):
-            # Embedded Python may supply NumPy through a separate site directory.
-            numpy_site = str(Path(numpy.__file__).resolve().parent.parent)
-            test_env = {**env, 'PYTHONPATH': str(location) + os.pathsep + numpy_site}
+            # NumPy is installed in this interpreter. Re-adding its entire site
+            # directory to PYTHONPATH can let third-party backports shadow stdlib.
+            test_env = {**env, 'PYTHONPATH': str(location)}
             probe = run([sys.executable, '-c',
                          'import json, x2ik, numpy; print(json.dumps(dict(version=x2ik.__version__, file=x2ik.__file__, numpy=numpy.__version__)))'],
                         cwd=work, env=test_env)
@@ -108,10 +116,17 @@ def verify(module_dir):
             output = run([sys.executable, '-m', 'unittest', 'discover', '-s', str(SOURCE / 'tests'), '-v'],
                          cwd=work, env=test_env)
             report['checks'][label + '_tests'] = output
-            for args in (['--help'], ['movej'], ['movej', '--tcp-mode', 'gripper'],
-                         ['mdi', '--stdio', '--demo']):
+            for args in (['--help'], ['movej'], ['mdi', '--stdio', '--demo']):
                 run([sys.executable, '-m', 'x2ik', *args], cwd=work, env=test_env, input='')
             report['checks'][label + '_offline_cli'] = True
+            for mode in ('hand', 'gripper', 'custom'):
+                for entry in ('movej', 'mdi'):
+                    run_rejected([sys.executable, '-m', 'x2ik', entry,
+                                  '--tcp-mode', mode], cwd=work, env=test_env)
+            for entry in ('movej', 'mdi'):
+                run_rejected([sys.executable, '-m', 'x2ik', entry,
+                              '--tcp-file', 'removed-tool.json'], cwd=work, env=test_env)
+            report['checks'][label + '_removed_end_effector_options_rejected'] = True
             print(f'{label}: source hashes, tests and offline CLI passed', flush=True)
     return report
 

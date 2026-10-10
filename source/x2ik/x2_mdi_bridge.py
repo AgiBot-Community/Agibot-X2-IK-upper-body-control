@@ -22,7 +22,6 @@ from .x2_frames import HOME_Q
 from .x2_compensation import fixed_compensation
 from .x2_mdi import Session, ActionQuery, is_urs, _solve_pose
 from .x2_srs_ik import SrsArmIK
-from .x2_tcp import TCP_MODES, load_tcp_tools
 
 MODES = {"xyz": 3, "pose": 6, "d": 3, "R": 3, "t": 3, "rpy": 3, "j": 7}
 LEASE_SECONDS = 2.0
@@ -37,8 +36,10 @@ def validate_request(request):
     if not isinstance(request, dict) or not isinstance(request.get("id"), (str, int)):
         raise ValueError("request requires an id")
     op = request.get("op")
-    if any(key in request for key in ("tcp_mode", "tcp_file", "tcp_config")):
-        raise ValueError("TCP 工具只能在连接前选择；请断开后重新连接")
+    if any(key in request for key in (
+            "tcp_mode", "tcp_file", "tcp_config", "tcp_offset", "tcp_rotation",
+            "payload", "payload_mass", "payload_com", "hand_mode", "hand_sub_mode", "hand_pos")):
+        raise ValueError("项目固定使用机器人腕原点，不接受末端工具配置")
     if op == "action":
         raise ValueError(URS_REQUIRED)
     if op not in ("heartbeat", "arm", "disarm", "mdi", "home", "close", "state"):
@@ -127,7 +128,7 @@ class Transport:
 
 
 class Bridge:
-    def __init__(self, transport, demo=False, tcp_mode="none", tcp_file=None):
+    def __init__(self, transport, demo=False):
         self.transport, self.demo = transport, demo
         self.armed = self.busy = False
         self.session = self.cli = self.query = None
@@ -136,11 +137,7 @@ class Bridge:
         self.last_state = 0.
         self.next_action_query = 0.
         self.feedback_count, self.feedback_at = -1, 0.
-        self.tcp_tools = load_tcp_tools(tcp_mode, tcp_file)
-        self.tcp_mode = tcp_mode
-        self.models = {s: ArmModel(s, tcp_offset=t["translation_m"],
-                                   tcp_rotation=t["rotation_matrix"])
-                       for s, t in self.tcp_tools.items()}
+        self.models = {s: ArmModel(s) for s in ("left", "right")}
         self.iks = {s: SrsArmIK(self.models[s]) for s in self.models}
         self.demo_q = {s: HOME_Q.copy() for s in self.models}
         if not demo:
@@ -223,12 +220,11 @@ class Bridge:
                 arms[side] = dict(q_deg=np.degrees(q).tolist(), xyz=pos.tolist(),
                                   rpy_deg=np.degrees(matrix_to_rpy(rot)).tolist(),
                                   points=[p.tolist() for p in points] + [pos.tolist()],
-                                  tcp=self.tcp_tools[side],
                                   link_transforms=[dict(xyz=p.tolist(), rotation=r.tolist())
                                                    for p, r in zip(points, rotations)])
         return dict(type="state", demo=self.demo, connected=True, armed=self.armed,
                     busy=self.busy, action=self.action, fresh=fresh,
-                    tcp_mode=self.tcp_mode,
+                    tcp_mode="none",  # Fixed wrist-frame compatibility marker.
                     command_endpoint_owned=False if self.cli is None else getattr(self.cli, 'pub', None) is not None,
                     urs_confirmed=self.urs_confirmed(),
                     arms=arms)
@@ -258,7 +254,7 @@ class Bridge:
         if not self.demo and self.session is None:
             self.cli.enable_commands()
             args = SimpleNamespace(side="right", duration=8., settle=2., relax=0., dry=False,
-                                   mode="upper_body", payload=0.)
+                                   mode="upper_body")
             self.session = Session(self.cli, args, self.ros)
             self.session.initialize()
             self.transport.check_lease()
@@ -404,8 +400,6 @@ class Bridge:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--demo", action="store_true")
-    parser.add_argument("--tcp-mode", choices=TCP_MODES, default="none")
-    parser.add_argument("--tcp-file", help="custom 模式的机器人本地 TCP 标定 JSON")
     args = parser.parse_args(argv)
     original_stdout = sys.stdout
     output = original_stdout
@@ -422,8 +416,7 @@ def main(argv=None):
         os.dup2(stderr_fd, stdout_fd)
     sys.stdout = sys.stderr  # Legacy helper diagnostics must never corrupt JSONL.
     try:
-        return Bridge(Transport(sys.stdin, output), demo=args.demo,
-                      tcp_mode=args.tcp_mode, tcp_file=args.tcp_file).run()
+        return Bridge(Transport(sys.stdin, output), demo=args.demo).run()
     except Exception as exc:
         print(f"MDI bridge stopped: {exc}", file=sys.stderr)
         return 1
