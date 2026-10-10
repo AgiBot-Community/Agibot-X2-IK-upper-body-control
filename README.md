@@ -1,73 +1,42 @@
-# X2 MDI / MoveJ V2.1 交付说明
+# X2 IK / MDI / MoveJ
 
-本说明面向接收模块的使用者。公开入口只有机器人端 MDI 和 Python `Robot.moveJ()`；
-桌面客户端是 Linux x86_64 AppImage，通过 SSH 标准输入/输出连接机器人，不新增 HTTP 服务。
+灵犀 X2 双臂逆运动学与运动接口，提供机器人端 MDI、Python `Robot.moveJ()` 和 Linux x86_64 桌面客户端，桌面通过 SSH 连接机器人。
 
-首次了解项目请先阅读[项目整体介绍与逆运动学原理](docs/PROJECT_OVERVIEW.md)。
-仅在 URS 模式下支持运动，客户须自行切换；MDI 不带模式切换功能。
-产品版本 V2.1，机器人模块版本 `2.1.1`，桌面客户端版本 `2.1.0`，源码基线 `community/V2.1.1 @ 2f6302e`。
+产品版本 V2.1，机器人模块 `2.1.1`，桌面客户端 `2.1.0`；源码同步自 GitLab `V2.0` 与 GitHub 社区 `V2.1.1`。
 
-2.1.1 将位姿复核、原位保持和局部连续求解并入原有 IK，MDI 直接使用更新后的求解器，
-无需另装验证模块。Python `Robot.moveJ()` 的关节目标仍走关节空间插值，当前公开接口已移除末端工具参数。
+## IK 2.1.1
 
-## 交付内容
+这一版在原求解器中加入位姿复核、原位保持和局部连续求解，改善部分可达目标求解失败和连续运动跳解的问题，MDI 已接入新求解器，`Robot.moveJ()` 仍按七关节目标进行关节空间插值。
 
-以下命令均在交付根目录执行，`SHA256SUMS` 列出实际提供的文件，
-执行 `sha256sum -c SHA256SUMS` 可检查完整性。
+离线验证通过 112 个回归目标、200 个随机目标和双臂连续路径检查，验证样本的模型内位置残差不超过 0.01 mm、姿态残差不超过 0.001°，实机定位还受模型、关节零位和负载影响，测试记录见 [IK 验证说明](docs/IK_VALIDATION.md)。
+
+本项目的位置、姿态和 MDI 笛卡尔目标固定为对应侧 `wrist_roll_link` 腕原点及坐标轴，使用 `torso_link` 坐标系。不提供夹爪、灵巧手、自定义末端的配置、标定或动力学适配。不同末端的机构、质量、质心和负载不同，必须针对具体末端单独建模、解析并验证重力补偿；本项目不支持末端泛化，包括自定义工具。
+
+## 目录
 
 ```text
-交付目录/
-├── README.md
-├── module/
-│   ├── x2ik-2.1.1-py3-none-any.whl
-│   └── x2ik-runtime-2.1.1.tar.gz
-├── desktop/
-│   ├── X2-MDI-2.1.0-x86_64.AppImage
-│   └── APPIMAGE_BUILD_INFO.json
-├── examples/
-│   ├── movej_minimal.py
-│   └── mdi_minimal.sh
-├── docs/
-│   ├── PROJECT_OVERVIEW.md
-│   ├── MODULE_GUIDE.md
-│   ├── DESKTOP_MDI_GUIDE.md
-│   ├── COORDINATES.md
-│   └── IK_VALIDATION.md
-├── source/
-│   ├── x2ik/                     完整机器人模块与模型
-│   ├── tests/                    离线回归测试和固定目标样本
-│   ├── pyproject.toml
-│   ├── tools/                    模块构建、包验证与桌面构建
-│   └── desktop/                  桌面客户端源码
-├── verification/                 安装包离线测试及源码哈希记录
-├── licenses/                     随包组件的许可文件
-├── THIRD_PARTY_NOTICES.txt
-└── SHA256SUMS
+module/        wheel 和独立 runtime 安装包
+source/        模块源码、测试及构建工具
+desktop/       桌面 AppImage
+examples/      MoveJ 和 MDI 最简示例
+docs/          使用说明与 IK 验证
+verification/  安装包验证记录
+licenses/      第三方许可
 ```
 
-wheel 与 runtime 压缩包提供的是同一模块，按部署方式选用一个即可。
-模块不附带 ROS、AimDK、SSH 凭据、机器人现场配置或标定数据。
-桌面客户端包含自身运行所需的 Python/Qt，机器人端仍需现有 ROS / AimDK 消息环境。
+文件完整性可用 `sha256sum -c SHA256SUMS` 检查，再分发时保留 `licenses/` 和 `THIRD_PARTY_NOTICES.txt`。
 
-## 安装机器人模块
+## 安装
 
-要求 Python 3.10 或以上、NumPy，以及适配的 ROS 2 / AimDK 消息环境。在交付目录可使用 wheel：
+机器人端需要 Python 3.10 或以上、NumPy 和适配的 ROS 2 / AimDK 环境。运动前自行切换到 URS（`UPPERBODY_REMOTE_SPLIT`）；MDI 和 MoveJ 不带模式切换功能。以下命令在仓库根目录执行：
 
 ```bash
 python3 -m pip install --upgrade module/x2ik-2.1.1-py3-none-any.whl
 export X2IK_CONFIG=/path/to/robot/x2ik.conf
 python3 -m x2ik --help
-python3 -m x2ik movej
 ```
 
-最后一条默认只打印 HOME 目标，不连接或运动。需由现场维护者提供该机器的 `x2ik.conf`，
-并加载 ROS / AimDK 环境。客户 MDI / MoveJ 内置固定 `40 N·m/rad / 12° / pelvis` 补偿，
-不读取或要求创建 SN 标定文件。当前没有自动运动标定流程，固定参数也不代表新机精度验收。
-本项目仅支持机器人腕原点，不提供末端工具配置或标定。
-换机仍需核对型号、模型、有效反馈与 IMU，并分别验证两臂，具体见
-[模块指南](docs/MODULE_GUIDE.md#更换机器人与现场标定)。
-
-若使用独立目录：
+将 `X2IK_CONFIG` 替换为本机配置路径，也可以使用独立 runtime，二选一：
 
 ```bash
 tar -xzf module/x2ik-runtime-2.1.1.tar.gz
@@ -76,13 +45,19 @@ export X2IK_CONFIG=/path/to/robot/x2ik.conf
 python3 -m x2ik --help
 ```
 
-升级后可用 `python3 -c "import x2ik; print(x2ik.__version__, x2ik.__file__)"`
-确认实际加载的是 2.1.1。独立目录部署应先解压到新目录，再切换运行路径，避免混用旧模块。
-桌面 2.1.0 通过 SSH 调用机器人侧模块，升级机器人模块后即可使用新的 IK，桌面协议保持兼容。
+查看实际加载的模块：
+
+```bash
+python3 -c "import x2ik; print(x2ik.__version__, x2ik.__file__)"
+```
+
+MDI / MoveJ 使用固定重力补偿参数：刚度 40 N·m/rad、补偿上限 12°、重力来源 pelvis，不读取或要求 SN 标定文件。固定参数不代表新机精度验收；换机时按 [模块指南](docs/MODULE_GUIDE.md) 核对模型、配置、有效反馈和 IMU，并分别验证两臂。
+
+为让 MC 消费双臂目标，在线上肢消息固定发送 `hand_sub_mode=1` 与 `hand_pos=[0, 0]`。这些协议字段没有用户配置入口；按协议，`hand_pos=[0, 0]` 是配套夹爪闭合值，带末端运行前必须现场确认该效果可接受。
 
 ## Python MoveJ
 
-最简调用如下，执行时会实际运动：
+下面的调用会驱动右臂到 HOME：
 
 ```python
 from x2ik import Robot, HOME
@@ -91,71 +66,52 @@ with Robot() as robot:
     result = robot.moveJ(HOME, side="right", duration=8, settle=2)
 ```
 
-`HOME` 为七关节目标，关节顺序是肩 pitch / roll / yaw、肘、腕 yaw / pitch / roll。
-目标用 rad，时长用 s；左右臂由 `side="left"` / `"right"` 指定。
-同时控制双臂使用同一个实例：
+目标为七个关节角，单位 rad，顺序为肩 pitch / roll / yaw、肘、腕 yaw / pitch / roll，时长单位 s，双臂运动使用同一个实例：
 
 ```python
 with Robot() as robot:
     result = robot.moveJ(q_left=HOME, q_right=HOME, duration=8, settle=2)
 ```
 
-结果 `position_m/rotation_matrix` 报告机器人腕原点的反馈 FK。
-不同末端工具的机构、质量、质心与负载不同，
-必须针对具体工具单独建模、解析并验证重力补偿；本项目不支持跨末端工具泛化。
-在线控制为满足 MC 的双臂消息协议，会固定发送无配置入口的兼容字段；协议规定 `hand_pos=[0, 0]` 为夹爪闭合值，带末端运行前须现场确认。
+返回结果中，`err_max` 是关节误差（rad），`position_m` 和 `rotation_matrix` 是由关节反馈计算的腕原点位姿，MoveJ 返回后不再后台发送保持命令。
 
-最简示例 `examples/movej_minimal.py` 默认离线，只有加 `--execute` 才连接并运动。
-在线运动要求机器人已处于 URS，其他控制会话已退出，现场路径已检查。
-MoveJ 方法返回后不后台保持；返回的 `err_max` 是关节误差 rad，不是 TCP 毫米误差。
+`examples/movej_minimal.py` 默认只打印目标，添加 `--execute` 后连接机器人并运动。在线运动要求机器人已处于 URS、反馈和 pelvis IMU 有效、其他上肢控制会话已退出，并已检查现场路径。
 
-## MDI
+## MDI 与桌面
 
-安装模块后，启动示例的默认行为是显示帮助，不连接机器人：
+在仓库根目录查看帮助或只读反馈：
 
 ```bash
 sh examples/mdi_minimal.sh
 sh examples/mdi_minimal.sh --dry --side right
 ```
 
-`--dry` 可以建立 ROS 连接并订阅机器人反馈，但不发布运动命令。显式使用 `--execute` 才进入在线终端控制，
-该会话可能持续发送保持命令。在线终端 `q!` 直接停止发送退出，普通 `q` 会先让双臂 HOME 再退出。
-这与关闭桌面窗口的行为不同。
+`--dry` 会连接并订阅机器人反馈，但不发布运动命令。进入在线控制：
 
-桌面端由 AppImage 启动：
+```bash
+sh examples/mdi_minimal.sh --execute --side right
+```
+
+MDI 支持绝对位姿、相对平移/旋转、关节目标和双臂 HOME，位置可用 m / mm，角度用 deg，笛卡尔目标固定为腕原点。在线会话中 `q!` 停止发送并退出，`q` 先让双臂回 HOME 再退出。
+
+桌面离线预览：
 
 ```bash
 chmod +x desktop/X2-MDI-2.1.0-x86_64.AppImage
 ./desktop/X2-MDI-2.1.0-x86_64.AppImage --demo
 ```
 
-`--demo` 离线展示界面。真实连接时在应用中设置自己的 SSH 目标、机器人项目目录与密钥。
-先用普通 SSH 验证主机身份并配置公钥认证。桌面默认连接后只读显示双臂 3D 模型及数值反馈，
-显式启用发送后才允许下发。MDI 支持绝对位置/姿态、相对平移/旋转、关节目标与双臂 HOME。
-桌面 MDI 位置输入可选 m / mm，角度用 deg；这与 Python MoveJ 的 rad 不同。
-MDI 笛卡尔目标和反馈统一指对应侧机器人腕原点。
-目标预检使用原始位姿求解，返回前按完整模型复核位置、姿态和关节限位，
-当前姿态已经满足目标时保留原关节角，连续运动优先从上一帧进行局部求解。
-运动中保持解析分支检查和 0.05 rad 单帧关节变化上限，不启用全局备用种子，
-连续五帧无合格解时停止推进，单帧上限不等同于速度或加速度规划。
-离线测试范围和复现方法见 [IK 验证说明](docs/IK_VALIDATION.md)。
-3D 外观来自配套 STL 的简化网格，未发现 STEP 资源；缺少有效资源时回退骨架，不作碰撞模型使用。
+当前 AppImage 使用官方静态 type-2 runtime，无需安装系统 `libfuse2`。不带参数启动时显示连接界面，不自动连接机器人；系统不允许 FUSE 挂载时可解包启动：
 
-本产品仅在 URS（`UPPERBODY_REMOTE_SPLIT`）模式下支持运动。客户须通过机器人原有
-操作工具自行切换到 URS。MDI 不带模式切换功能，也不提供任何配置开关开启该能力。
-HOME 会移动双臂，桌面停止下发、断线或关闭不会自动 HOME 或切换状态。
-停止下发不是硬件急停；SSH 和本地客户端仍有控制能力，应用形态不构成运动安全保证。
-当前模块没有碰撞规划，显示的 TCP 来自关节反馈的模型 FK，不是外部位置测量。
+```bash
+./desktop/X2-MDI-2.1.0-x86_64.AppImage --appimage-extract-and-run
+```
 
-## 维护边界
+实际连接时填写 SSH 目标和机器人运行目录，先完成 SSH 主机身份验证与公钥登录。连接后先显示反馈，启用发送后才下发动作，关闭窗口不会自动 HOME 或切换模式，操作步骤见 [桌面指南](docs/DESKTOP_MDI_GUIDE.md)。停止下发不是硬件急停；本项目没有碰撞规划，界面位姿来自模型 FK，不是外部位置测量。
 
-业务使用者依赖 `Robot`、`HOME` 和 MDI 入口即可。包内其他模块是内部实现，
-旧 `X2Arm`、测试脚本、开发机路径及历史验收报告不属于该交付接口。
-完整项目的 `results/`、`backups/`、SDK、现场配置与标定不需要复制给一般使用者。
-机器人模块、桌面源码及构建脚本在 `source/`，随包组件的许可文件和说明在 `licenses/`、
-`THIRD_PARTY_NOTICES.txt`，重新分发时应保留这些内容。
+## 开发与文档
 
-源码测试和机器人模块构建不需要 ROS、SDK 或 Isaac Sim，在独立 Python 环境中执行：
+在工作站建立独立 Python 环境后测试和构建，不需要 ROS 或机器人：
 
 ```bash
 cd source
@@ -168,6 +124,10 @@ python tools/verify_release.py --output ../verification/2.1.1-local.json
 python tools/update_checksums.py
 ```
 
-构建同时生成 `module/` 下的 wheel 和 runtime，二者来自同一份 `source/x2ik/`，
-包验证会在临时目录安装 wheel、解压 runtime，分别运行离线测试与命令入口，
-不连接机器人、不改变当前 Python 环境的安装内容，验证结果文件已存在时需换一个文件名。
+wheel 与 runtime 来自同一份 `source/x2ik/`，验证结果文件已存在时换一个输出文件名。
+
+- [项目介绍与 IK 原理](docs/PROJECT_OVERVIEW.md)
+- [模块接口与机器人配置](docs/MODULE_GUIDE.md)
+- [桌面使用与启动说明](docs/DESKTOP_MDI_GUIDE.md)
+- [坐标系与单位](docs/COORDINATES.md)
+- [IK 验证结果](docs/IK_VALIDATION.md)
