@@ -8,7 +8,7 @@ ROS / AimDK 环境填写，再把文件的绝对路径填入 MDI 的“机器人
 
 | 路径 | 用途 | 示例 |
 | --- | --- | --- |
-| wheel 文件路径 | `pip install` 读取的安装包，可存放在任意目录 | `/home/agi/downloads/x2ik-2.1.0-py3-none-any.whl` |
+| wheel 文件路径 | `pip install` 读取的安装包，可存放在任意目录 | `/home/agi/downloads/x2ik-2.1.1-py3-none-any.whl` |
 | MDI 运行目录 | SSH 登录机器人后，启动 `python3 -m x2ik` 的工作目录 | wheel 安装：`/home/agi/x2ik/run`；runtime 解压：`/home/agi/x2ik/runtime` |
 | 机器人配置 | 机器人上已填写的 `x2ik.conf` 文件路径 | `/home/agi/x2ik/x2ik.conf` |
 
@@ -78,7 +78,7 @@ TCP 工具 JSON 另行填写，见 [TCP 标定指南](TCP_CALIBRATION_GUIDE.md)�
 在机器人交付包根目录中，使用后续启动模块的 Python 安装：
 
 ```bash
-python3 -m pip install module/x2ik-2.1.0-py3-none-any.whl
+python3 -m pip install module/x2ik-2.1.1-py3-none-any.whl
 cd /home/agi/x2ik/run
 export X2IK_CONFIG=/home/agi/x2ik/x2ik.conf
 test -f "$X2IK_CONFIG"
@@ -100,7 +100,7 @@ python3 -m x2ik movej
 
 ```bash
 mkdir -p /home/agi/x2ik
-tar -xzf module/x2ik-runtime-2.1.0.tar.gz -C /home/agi/x2ik
+tar -xzf module/x2ik-runtime-2.1.1.tar.gz -C /home/agi/x2ik
 cd /home/agi/x2ik/runtime
 export X2IK_CONFIG=/home/agi/x2ik/x2ik.conf
 test -f "$X2IK_CONFIG"
